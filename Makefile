@@ -7,7 +7,7 @@ LIBS = -lpthread
 
 VPATH := src
 
-SOURCES = ctimer.c
+SOURCES = ctimer.c btree/btree.c
 
 BIN_DIR = ./Bin
 

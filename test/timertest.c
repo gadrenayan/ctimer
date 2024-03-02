@@ -26,14 +26,12 @@ void main()
     initialize();
 	sleep(2);
 
-    timer1 = start_timer(200, time_handler1, TIMER_SINGLE_SHOT, NULL);
-    timer2 = start_timer(100, time_handler2, TIMER_PERIODIC, NULL);
+    timer1 = start_timer(2500, time_handler1, TIMER_SINGLE_SHOT, NULL);
     timer3 = start_timer(2000, time_handler3, TIMER_PERIODIC, NULL);
 
     sleep(6);
 
     stop_timer(timer1);
-    stop_timer(timer2);
     stop_timer(timer3);
 
     finalize();

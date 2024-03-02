@@ -12,6 +12,7 @@
 #include <errno.h>
 
 #include "ctimer.h"
+#include "btree/btree.h"
 
 #define MAX_TIMER_COUNT 1000
 
@@ -22,22 +23,55 @@ struct timer_node
 	void *              user_data;
 	unsigned int        interval;
 	t_timer             type;
-	struct timer_node * next;
 };
 
 static void * _timer_thread(void * data);
 static pthread_t g_thread_id;
-static struct timer_node *g_head = NULL;
+static struct btree *g_root = NULL;
 int epoll_fd = -1;
+
+int compare_fd(const void *a, const void *b, void *udata) {
+	const struct timer_node *ua = a;
+	const struct timer_node *ub = b;
+
+	if (ua->fd == ub->fd) {
+		return 0;
+	} else if (ua->fd > ub->fd) {
+		return 1;
+	} else {
+		return -1;
+	}
+}
+
+void timer_node_free(const void *item, void *udata) {
+	struct timer_node *node = (struct timer_node*)item;
+	struct epoll_event event;
+	printf("%s: called for fd: %d interval: %u\n", __func__, node->fd, node->interval);
+	memset(&event, 0 , sizeof(struct epoll_event));
+	int ret = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, node->fd, NULL);
+	if (ret != 0) {
+		printf("%s: Failed to DEL fd: %d timer: %u\n", __func__, node->fd, node->interval);
+		assert(0);
+	}
+	close(node->fd);
+	free(node);
+	printf("%s: freed node\n", __func__);
+}
 
 int initialize()
 {
+	printf("%s\n", __func__);
+	g_root = btree_new(sizeof(struct timer_node), 0, compare_fd, NULL);
+	if (g_root == NULL) {
+		printf("%s: couldn't init btree root\n", __func__);
+		assert(0);
+	}
+	btree_set_item_callbacks(g_root, NULL, timer_node_free);
 	if(pthread_create(&g_thread_id, NULL, _timer_thread, NULL))
 	{
 		/*Thread creation failed*/
 		return 0;
 	}
-
 	return 1;
 }
 
@@ -46,6 +80,7 @@ size_t start_timer(unsigned int interval, time_handler handler, t_timer type, vo
 	struct timer_node * new_node = NULL;
 	struct itimerspec new_value;
 
+	printf("%s\n", __func__);
 	new_node = (struct timer_node *)malloc(sizeof(struct timer_node));
 
 	if(new_node == NULL) return 0;
@@ -76,9 +111,12 @@ size_t start_timer(unsigned int interval, time_handler handler, t_timer type, vo
 
 	timerfd_settime(new_node->fd, 0, &new_value, NULL);
 
-	/*Inserting the timer node into the list*/
-	new_node->next = g_head;
-	g_head = new_node;
+	/*Inserting the timer node into the btree*/
+	void * ret = btree_set(g_root, new_node);
+	if (ret != NULL) {
+		printf("%s: btree_set failed for fd: %d interval: %u\n", __func__, new_node->fd, interval);
+		assert(0);
+	}
 
 	struct epoll_event event;
 	memset(&event, 0, sizeof(struct epoll_event));
@@ -95,53 +133,40 @@ size_t start_timer(unsigned int interval, time_handler handler, t_timer type, vo
 	return (size_t)new_node;
 }
 
-void stop_timer(size_t timer_id)
-{
+void stop_timer(size_t timer_id) {
 	struct timer_node * tmp = NULL;
 	struct timer_node * node = (struct timer_node *)timer_id;
 
 	if (node == NULL) return;
-
-	if(node == g_head) {
-		g_head = g_head->next;
-		struct epoll_event event;
-		memset(&event, 0 , sizeof(struct epoll_event));
-		int ret = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, node->fd, NULL);
-		if (ret != 0) {
-			printf("%s: Failed to DEL fd: %d timer: %u\n", __func__, node->fd, node->interval);
-			assert(0);
-		}
-		close(node->fd);
-		free(node);
-	} else {
-		tmp = g_head;
-		while(tmp && tmp->next != node) 
-			tmp = tmp->next;
-		if(tmp)
-		{
-			/*tmp->next can not be NULL here*/
-			tmp->next = tmp->next->next;
-			struct epoll_event event;
-			memset(&event, 0 , sizeof(struct epoll_event));
-			int ret = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, node->fd, NULL);
-			if (ret != 0) {
-				printf("%s: Failed to DEL fd: %d timer: %u\n", __func__, node->fd, node->interval);
-				assert(0);
-			}
-			close(node->fd);
-			free(node);
-		}
+	printf("%s\n", __func__);
+/*
+	struct epoll_event event;
+	memset(&event, 0 , sizeof(struct epoll_event));
+	int ret = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, node->fd, NULL);
+	if (ret != 0) {
+		printf("%s: Failed to DEL fd: %d timer: %u\n", __func__, node->fd, node->interval);
+		assert(0);
 	}
+*/
+	void *ret = btree_delete(g_root, node);
+	if (ret == NULL) {
+		printf("%s: Could not find node fd: %d interval: %u\n", __func__, node->fd, node->interval);
+		assert(0);
+	}
+/*
+	close(node->fd);
+	free(node);
+*/
 }
 
 void finalize()
 {
-	while(g_head) stop_timer((size_t)g_head);
-
+	printf("%s\n", __func__);
+	btree_free(g_root);
 	pthread_cancel(g_thread_id);
 	pthread_join(g_thread_id, NULL);
 }
-
+/*
 struct timer_node * _get_timer_from_fd(int fd)
 {
 	struct timer_node * tmp = g_head;
@@ -154,7 +179,7 @@ struct timer_node * _get_timer_from_fd(int fd)
 	}
 	return NULL;
 }
-
+*/
 void * _timer_thread(void * data)
 {
 	struct epoll_event events[MAX_TIMER_COUNT];
@@ -170,6 +195,7 @@ void * _timer_thread(void * data)
 		return NULL;
 	}
 	printf("%s: Created Epoll context\n", __func__);
+/*
 	tmp = g_head;
 	while(tmp)
 	{
@@ -184,7 +210,7 @@ void * _timer_thread(void * data)
 		}
 		tmp = tmp->next;
 	}
-
+*/
 	while(running == 1)
 	{
 		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
@@ -199,9 +225,16 @@ void * _timer_thread(void * data)
 			printf("Reading the fd: %d\n", events[i].data.fd);
 			s = read(events[i].data.fd, &exp, sizeof(uint64_t));
 			if (s != sizeof(uint64_t)) continue;
-			tmp = _get_timer_from_fd(events[i].data.fd);
-			printf("Timer with interval: %u expired\n", tmp->interval);
-			if(tmp && tmp->callback) tmp->callback((size_t)tmp, tmp->user_data);
+			//tmp = _get_timer_from_fd(events[i].data.fd);
+			struct timer_node in = {.fd = events[i].data.fd};
+			struct timer_node *out = NULL;
+			out = btree_get(g_root, &in);
+			if (out == NULL) {
+				printf("%s: Could not find timer with fd: %d interval: %u\n", __func__, out->fd, out->interval);
+				continue;
+			}
+			printf("Timer with interval: %u expired\n", out->interval);
+			if(out && out->callback) out->callback((size_t)out, out->user_data);
 		}
 	}
 	return NULL;
