@@ -1,0 +1,7 @@
+## git submodule update --recursive src/btree
+## gcc -c -fPIC ctimer.c -o ctimer.o
+## gcc -fPIC -c btree/btree.c -o btree.o
+
+## gcc -shared -fPIC ctimer.o btree.o -o libctimer.so
+
+## gcc -L../src/ -I../src/ -o timertest timertest.c -lctimer -pthread
