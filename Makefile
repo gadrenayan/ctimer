@@ -5,7 +5,7 @@ INCLUDES = -I.
 
 LIBS = -lpthread
 
-VPATH := src
+VPATH := src src/btree
 
 SOURCES = ctimer.c btree/btree.c
 
